@@ -1,0 +1,7 @@
+
+debug
+*.pem
+*.json
+*.db
+.env
+.vscode
