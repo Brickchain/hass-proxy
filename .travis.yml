@@ -10,7 +10,7 @@ before_script:
 
 script:
   - GOARCH=amd64 CGO_ENABLED=0 go build -tags netgo -ldflags "-X main.Version=$VERSION -extldflags '-static'" -gcflags "all=-trimpath=$GOPATH" -o hass-proxy-${VERSION}-amd64
-  - GOARCH=i386 CGO_ENABLED=0 go build -tags netgo -ldflags "-X main.Version=$VERSION -extldflags '-static'" -gcflags "all=-trimpath=$GOPATH" -o hass-proxy-${VERSION}-i386
+  - GOARCH=386 CGO_ENABLED=0 go build -tags netgo -ldflags "-X main.Version=$VERSION -extldflags '-static'" -gcflags "all=-trimpath=$GOPATH" -o hass-proxy-${VERSION}-i386
   - GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -tags netgo -ldflags "-X main.Version=$VERSION -extldflags '-static'" -gcflags "all=-trimpath=$GOPATH" -o hass-proxy-${VERSION}-armhf
   - aws s3 cp  hass-proxy-${VERSION}-amd64 s3://${ARTIFACTS_BUCKET}/
   - aws s3 cp  hass-proxy-${VERSION}-i386 s3://${ARTIFACTS_BUCKET}/
