@@ -69,42 +69,58 @@ func (c *Controller) Register(ourURL, binding, secret string) error {
 
 // Verify checks if an http request has the Authorization header with a mandate-token that matches the realm and mandate roles
 // that the Brickchain HASS Controller told us about
-func (c *Controller) Verify(req *http.Request) bool {
+func (c *Controller) Verify(req *http.Request) (bool, *time.Time) {
 	signer, token, err := parseMandateToken(req)
 	if err != nil {
 		logger.Error(err)
-		return false
+		return false, nil
 	}
 
+	var allowed bool
+	var until *time.Time
 	for _, mandate := range parseMandates(token) {
 		if crypto.Thumbprint(mandate.Signer) == crypto.Thumbprint(c.realmKey) {
 			if crypto.Thumbprint(signer) == crypto.Thumbprint(mandate.Mandate.Recipient) {
 				for _, role := range c.roles {
 					if role == mandate.Mandate.Role {
-						return true
+						allowed = true
+						if until == nil || mandate.Mandate.ValidUntil.After(*until) {
+							until = mandate.Mandate.ValidUntil
+						}
 					}
 				}
 			}
 		}
 	}
 
-	return false
+	return allowed, until
 }
 
 func parseMandateToken(req *http.Request) (*jose.JsonWebKey, *document.MandateToken, error) {
+	tokenString := ""
 	a := req.Header.Get("Authorization")
+	if a != "" {
+		var l = strings.Split(a, " ")
 
-	var l = strings.Split(a, " ")
+		if len(l) < 2 {
+			return nil, nil, errors.New("broken auth header")
+		}
 
-	if len(l) < 2 {
-		return nil, nil, errors.New("broken auth header")
+		if strings.ToUpper(l[0]) != "MANDATE" {
+			return nil, nil, errors.New("unknown auth method")
+		}
+
+		tokenString = l[1]
+	} else {
+		cookie, err := req.Cookie("mandate")
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "could not get mandate cookie")
+		}
+
+		tokenString = cookie.Value
 	}
 
-	if strings.ToUpper(l[0]) != "MANDATE" {
-		return nil, nil, errors.New("unknown auth method")
-	}
-
-	tokenJWS, err := crypto.UnmarshalSignature([]byte(l[1]))
+	tokenJWS, err := crypto.UnmarshalSignature([]byte(tokenString))
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "failed to unmarshal JWS")
 	}
