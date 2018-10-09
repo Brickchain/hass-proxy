@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -119,8 +120,8 @@ func (h *httpClient) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// check that the request is authorized to talk to us
 	if !h.controller.Verify(r) {
-		logger.Debug("Unauthorized")
 		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, "Failed to verify request")
 		return
 	}
 
@@ -141,7 +142,7 @@ func (h *httpClient) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// set the X-HA-ACCESS header based on the HASSIO_TOKEN environment variable
 	if viper.GetString("hassio_token") != "" {
-		req.Header.Set("X-HA-ACCESS", viper.GetString("hassio_token"))
+		req.Header.Set("X-HASSIO-KEY", viper.GetString("hassio_token"))
 	}
 
 	client := &http.Client{
