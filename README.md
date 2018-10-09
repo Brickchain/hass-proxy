@@ -20,6 +20,12 @@ viper.SetDefault("key", "hass-proxy.pem")
 viper.SetDefault("hassio_token", "")
 ```
 
+The `remote` variable sets the remote address for the HASS Controller. Default is fine for most use cases, as the controller code is not yet published.
+
+The `proxy_endpoint` variable sets the address for the server side of this HASS Tunneling Proxy, although the proxy operated at proxy.svc.integrity.app is stable.
+
+In order to authenticate with your Home Assistant installation, use either the `secret`, or the `password` to allow the proxy to connect to the controller. If you do not trust the Integrity HASS Controller with your HASS password, use the secret.
+
 To use the tunnel for the Integrity setup, you need to set a secret from the Home Assistant administration interface.
 
 ## Binaries
