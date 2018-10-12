@@ -155,6 +155,9 @@ func (h *httpClient) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// write response code to the proxy response
+	w.WriteHeader(res.StatusCode)
+
 	// copy response headers to the proxy response
 	for k, v := range res.Header {
 		w.Header().Set(k, v[0])
@@ -170,6 +173,4 @@ func (h *httpClient) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// write body to the proxy response
 	w.Write(body)
 
-	// write response code to the proxy response
-	w.WriteHeader(res.StatusCode)
 }
