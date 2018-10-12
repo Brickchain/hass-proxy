@@ -3,6 +3,7 @@ package httphandler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/Brickchain/go-crypto.v2"
 	"github.com/Brickchain/go-document.v2"
@@ -90,7 +91,25 @@ func parseAction(h func(ActionRequest) Response) func(Request) Response {
 			}
 		}
 
+		thumbprints := make([]string, 0)
+		if action.GetCertificate() != "" {
+			_, signers, subject, err := crypto.VerifyDocumentWithCertificateChain(action, actionCertificate.KeyLevel)
+			if err != nil {
+				return NewErrorResponse(http.StatusBadRequest, errors.Wrap(err, "failed to verify certificate chain"))
+			}
+			thumbprints = append(thumbprints, crypto.Thumbprint(subject))
+			for _, k := range signers {
+				thumbprints = append(thumbprints, crypto.Thumbprint(k))
+			}
+		} else {
+			thumbprints = append(thumbprints, crypto.Thumbprint(actionCertificate.Issuer))
+			if crypto.Thumbprint(actionCertificate.Issuer) != crypto.Thumbprint(actionCertificate.Subject) {
+				thumbprints = append(thumbprints, crypto.Thumbprint(actionCertificate.Subject))
+			}
+		}
+
 		mandates := make([]AuthenticatedMandate, 0)
+	MANDATE_LOOP:
 		for i, m := range action.Mandates {
 			mandateSig, err := crypto.UnmarshalSignature([]byte(m))
 			if err != nil {
@@ -114,7 +133,7 @@ func parseAction(h func(ActionRequest) Response) func(Request) Response {
 
 			var mandateCertificate *document.Certificate
 			if mandate.Certificate != "" {
-				mandateCertificate, err = crypto.VerifyCertificate(mandate.Certificate, 1) // mandates are signed by the realm root key or the realm signing key
+				mandateCertificate, err = crypto.VerifyCertificate(mandate.Certificate, 10)
 				if err != nil {
 					return NewErrorResponse(http.StatusBadRequest, errors.Wrap(err, "failed to verify mandate certificate chain"))
 				}
@@ -125,20 +144,33 @@ func parseAction(h func(ActionRequest) Response) func(Request) Response {
 				signingKey = mandateCertificate.Issuer
 			}
 
-			if crypto.Thumbprint(actionCertificate.Issuer) != crypto.Thumbprint(mandate.Recipient) {
-				if len(action.Mandates) > i {
-					action.Mandates = append(action.Mandates[:i], action.Mandates[i+1:]...)
-				} else {
-					action.Mandates = action.Mandates[:i]
-				}
+			ts := time.Now()
 
-				continue
+			if mandate.ValidFrom != nil && ts.Before(*mandate.ValidFrom) {
+				continue MANDATE_LOOP
 			}
 
-			mandates = append(mandates, AuthenticatedMandate{
-				Mandate: mandate,
-				Signer:  signingKey,
-			})
+			if mandate.ValidUntil != nil && ts.After(*mandate.ValidUntil) {
+				continue MANDATE_LOOP
+			}
+
+			mandateThumbprint := crypto.Thumbprint(mandate.Recipient)
+			for _, t := range thumbprints {
+				if mandateThumbprint == t {
+					mandates = append(mandates, AuthenticatedMandate{
+						Mandate: mandate,
+						Signer:  signingKey,
+					})
+					continue MANDATE_LOOP
+				}
+			}
+
+			if len(action.Mandates) > i {
+				action.Mandates = append(action.Mandates[:i], action.Mandates[i+1:]...)
+			} else {
+				action.Mandates = action.Mandates[:i]
+			}
+
 		}
 
 		r := &authenticatedActionRequest{

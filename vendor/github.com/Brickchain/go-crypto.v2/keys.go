@@ -5,14 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base32"
+	"encoding/hex"
 	"encoding/pem"
-	"strings"
 
 	hash "crypto"
 
 	"github.com/pkg/errors"
-	jose "gopkg.in/square/go-jose.v1"
+	"gopkg.in/square/go-jose.v1"
 )
 
 func NewKey() (*jose.JsonWebKey, error) {
@@ -126,9 +125,8 @@ func SignKey(signerKey *jose.JsonWebKey, key *jose.JsonWebKey) (*jose.JsonWebSig
 
 func Thumbprint(key *jose.JsonWebKey) string {
 	keyTPbytes, _ := key.Thumbprint(hash.SHA256)
-	// encoder := *base32.StdEncoding
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(keyTPbytes))
-	// return hex.EncodeToString(keyTPbytes)
+	// return base64.URLEncoding.EncodeToString(keyTPbytes)
+	return hex.EncodeToString(keyTPbytes)
 }
 
 func MarshalToPEM(key *jose.JsonWebKey) ([]byte, error) {

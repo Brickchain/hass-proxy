@@ -46,8 +46,6 @@ const (
 )
 
 func (ch *cors) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// fmt.Println("serving a ", r.Method)
-
 	origin := r.Header.Get(corsOriginHeader)
 	if !ch.isOriginAllowed(origin) {
 		ch.h.ServeHTTP(w, r)
@@ -99,9 +97,7 @@ func (ch *cors) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(corsAllowMethodsHeader, method)
 		}
 	} else {
-		// fmt.Println("exposed headers:", ch.exposedHeaders)
 		if len(ch.exposedHeaders) > 0 {
-			// fmt.Println("exposed headers:", ch.exposedHeaders)
 			w.Header().Set(corsExposeHeadersHeader, strings.Join(ch.exposedHeaders, ","))
 		}
 	}
@@ -114,17 +110,7 @@ func (ch *cors) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(corsVaryHeader, corsOriginHeader)
 	}
 
-	returnOrigin := origin
-	for _, o := range ch.allowedOrigins {
-		// A configuration of * is different than explicitly setting an allowed
-		// origin. Returning arbitrary origin headers an an access control allow
-		// origin header is unsafe and is not required by any use case.
-		if o == corsOriginMatchAll {
-			returnOrigin = "*"
-			break
-		}
-	}
-	w.Header().Set(corsAllowOriginHeader, returnOrigin)
+	w.Header().Set(corsAllowOriginHeader, origin)
 
 	if r.Method == corsOptionMethod {
 		return

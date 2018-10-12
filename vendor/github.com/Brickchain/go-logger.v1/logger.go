@@ -1,5 +1,5 @@
 /*
-The package Logger is a wrapper for the Logrus logger package.
+Package logger is a wrapper for the Logrus logger package.
 
 Logger is used by most Brickchain software to enable context based logging with details needed by each component.
 
@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/sirupsen/logrus"
@@ -37,6 +38,18 @@ var (
 	ctxlogger *logrus.Entry
 	mu        *sync.Mutex
 )
+
+type devFormatter struct {
+	logrus.Formatter
+}
+
+func (f *devFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	b, err := f.Formatter.Format(entry)
+	s := strings.Replace(string(b), "\\n", "\n\t", -1)
+	s = strings.Replace(s, "\\t", "\t", -1)
+	s = strings.Replace(s, "\\\"", "\"", -1)
+	return []byte(s), err
+}
 
 // Entry contains a Logrus entry
 type Entry struct {
@@ -74,13 +87,20 @@ func SetFormatter(formatter string) {
 	switch formatter {
 	case "json":
 		_formatter = &logrus.JSONFormatter{}
+	case "dev":
+		_formatter = &devFormatter{&logrus.JSONFormatter{PrettyPrint: true}}
 	default:
 		_formatter = &logrus.TextFormatter{}
 	}
+	SetLogrusFormatter(_formatter)
+}
+
+// SetLogrusFormatter sets the logrus formatter to be used
+func SetLogrusFormatter(formatter logrus.Formatter) {
 	mu.Lock()
 	defer mu.Unlock()
 	data := ctxlogger.Data
-	logrus.SetFormatter(_formatter)
+	logrus.SetFormatter(formatter)
 	ctxlogger = logrus.WithFields(data)
 }
 

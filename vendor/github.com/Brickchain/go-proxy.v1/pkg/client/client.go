@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	proxy "github.com/Brickchain/go-proxy.v1"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
+	"github.com/posener/wstest"
 	jose "gopkg.in/square/go-jose.v1"
 
 	document "github.com/Brickchain/go-document.v2"
@@ -25,7 +27,6 @@ import (
 
 type ProxyClient struct {
 	base        string
-	id          string
 	url         string
 	endpoint    string
 	proxyDomain string
@@ -33,12 +34,14 @@ type ProxyClient struct {
 	writeLock   *sync.Mutex
 	regError    error
 	regDone     *sync.WaitGroup
-	initialized bool
 	connected   bool
 	handler     http.Handler
 	key         *jose.JsonWebKey
 	lastPing    time.Time
 	wg          sync.WaitGroup
+	ws          map[string]*wsConn
+	wsLock      *sync.Mutex
+	disconnect  bool
 }
 
 func NewProxyClient(endpoint string) (*ProxyClient, error) {
@@ -49,9 +52,9 @@ func NewProxyClient(endpoint string) (*ProxyClient, error) {
 		lastPing:  time.Now(),
 		regDone:   &sync.WaitGroup{},
 		wg:        sync.WaitGroup{},
+		ws:        make(map[string]*wsConn),
+		wsLock:    &sync.Mutex{},
 	}
-
-	p.regDone.Add(1)
 
 	go p.subscribe()
 
@@ -93,18 +96,15 @@ func (p *ProxyClient) write(b []byte) error {
 
 func (p *ProxyClient) Register(key *jose.JsonWebKey) (string, error) {
 
-	p.id = crypto.Thumbprint(key)
-	p.key = key
-
-	p.regDone.Wait()
+	p.register(key)
 
 	// time.Sleep(time.Second * 3)
 
-	return p.base, nil
+	return p.base, p.regError
 
 }
 
-func (p *ProxyClient) register() error {
+func (p *ProxyClient) register(key *jose.JsonWebKey) error {
 
 	for {
 		if p.connected {
@@ -118,7 +118,7 @@ func (p *ProxyClient) register() error {
 
 	b, _ := json.Marshal(mandateToken)
 
-	signer, err := crypto.NewSigner(p.key)
+	signer, err := crypto.NewSigner(key)
 	if err != nil {
 		return err
 	}
@@ -133,6 +133,7 @@ func (p *ProxyClient) register() error {
 	regReq := proxy.NewRegistrationRequest(jwsCompact)
 	regReqBytes, _ := json.Marshal(regReq)
 
+	p.regDone.Add(1)
 	if err := p.write(regReqBytes); err != nil {
 		return err
 	}
@@ -142,6 +143,7 @@ func (p *ProxyClient) register() error {
 		return p.regError
 	}
 
+	p.key = key
 	// p.base = fmt.Sprintf("%s.%s", p.id, p.proxyDomain)
 
 	return nil
@@ -184,24 +186,23 @@ func (p *ProxyClient) subscribe() error {
 	}()
 
 	for {
+		if p.disconnect {
+			return nil
+		}
+
 		if !p.connected {
-			// logger.Debug("Connecting to proxy...")
 			if err := p.connect(); err != nil {
 				logger.Error(errors.Wrap(err, "failed to connect to proxy"))
 				disconnect()
 				time.Sleep(time.Second * 10)
 				continue
 			}
-			// logger.Debug("Connected!")
 
 			if p.key != nil {
 				go func() {
-					// logger.Debug("Registering to proxy...")
-					if err := p.register(); err != nil {
+					if err := p.register(p.key); err != nil {
 						logger.Error(errors.Wrap(err, "failed to register to proxy"))
 						disconnect()
-					} else {
-						// logger.Debug("Registered!")
 					}
 				}()
 			}
@@ -213,7 +214,6 @@ func (p *ProxyClient) subscribe() error {
 			disconnect()
 			continue
 		}
-		// logger.Infof("recv: %s", body)
 
 		go func() {
 			docType, err := document.GetType(body)
@@ -231,19 +231,16 @@ func (p *ProxyClient) subscribe() error {
 				r := &proxy.RegistrationResponse{}
 				if err := json.Unmarshal(body, &r); err != nil {
 					logger.Error(errors.Wrap(err, "failed to unmarshal registration-response"))
+					p.regError = err
 				}
 
-				if r.KeyID != p.id {
-					p.regError = errors.New("Wrong KeyID in registration")
+				if r.Hostname != "" {
+					p.base = r.Hostname
 				} else {
-					if r.Hostname != "" {
-						p.base = r.Hostname
-					}
-					if !p.initialized {
-						p.initialized = true
-						p.regDone.Done()
-					}
+					p.regError = errors.New("no host in registration-response")
 				}
+
+				p.regDone.Done()
 
 			case proxy.SchemaBase + "/http-request.json":
 				p.lastPing = time.Now()
@@ -263,8 +260,9 @@ func (p *ProxyClient) subscribe() error {
 					r := &http.Request{
 						Method: req.Method,
 						URL: &url.URL{
-							Host: p.base,
-							Path: req.URL,
+							Host:     p.base,
+							Path:     req.URL,
+							RawQuery: req.Query,
 						},
 						RequestURI: req.URL,
 						Header:     make(http.Header),
@@ -312,9 +310,182 @@ func (p *ProxyClient) subscribe() error {
 						return
 					}
 				}
+			case proxy.SchemaBase + "/ws-request.json":
+				p.lastPing = time.Now()
+
+				if p.handler == nil {
+					logger.Error("No handler set, can't process ws-request")
+					return
+				}
+
+				req := &proxy.WSRequest{}
+				if err := json.Unmarshal(body, &req); err != nil {
+					logger.Error(errors.Wrap(err, "failed to unmarshal ws-request"))
+					return
+				}
+
+				dialer := wstest.NewDialer(p.handler)
+
+				headers := http.Header{}
+				for k, v := range req.Headers {
+					switch strings.ToUpper(k) {
+					case "CONNECTION":
+					case "UPGRADE":
+					case "SEC-WEBSOCKET-KEY":
+					case "SEC-WEBSOCKET-VERSION":
+					case "SEC-WEBSOCKET-EXTENSIONS":
+					default:
+						headers.Set(k, v)
+					}
+				}
+
+				u := url.URL{
+					Scheme:   "ws",
+					Host:     strings.Replace(strings.Replace(p.base, "https://", "", 1), "http://", "", 1),
+					Path:     req.URL,
+					RawQuery: req.Query,
+				}
+
+				c, _, err := dialer.Dial(u.String(), headers)
+				if err != nil {
+					err = errors.Wrap(err, "failed to dial websocket")
+					logger.Error(err)
+
+					res := proxy.NewWSResponse(req.ID, false)
+					res.Error = err.Error()
+
+					b, _ := json.Marshal(res)
+
+					if err := p.write(b); err != nil {
+						logger.Error(errors.Wrap(err, "failed to send ws-response"))
+						disconnect()
+						return
+					}
+
+					return
+				}
+
+				conn := &wsConn{
+					conn: c,
+					lock: &sync.Mutex{},
+				}
+
+				p.wsLock.Lock()
+				p.ws[req.ID] = conn
+				p.wsLock.Unlock()
+
+				b, _ := json.Marshal(proxy.NewWSResponse(req.ID, true))
+
+				if err := p.write(b); err != nil {
+					logger.Error(errors.Wrap(err, "failed to send ws-response"))
+					disconnect()
+					return
+				}
+
+				for {
+					typ, body, err := conn.conn.ReadMessage()
+					if err != nil {
+						logger.Errorf("got error while reading message: %s", err)
+
+						c.Close()
+
+						p.wsLock.Lock()
+						delete(p.ws, req.ID)
+						p.wsLock.Unlock()
+
+						t := proxy.NewWSTeardown(req.ID)
+						b, _ := json.Marshal(t)
+						p.write(b)
+
+						return
+					}
+
+					res := proxy.NewWSMessage(req.ID)
+					res.MessageType = typ
+					res.Body = string(body)
+
+					b, _ := json.Marshal(res)
+
+					// logger.Debugf("Sending response: %s", b)
+					if err := p.write(b); err != nil {
+						logger.Error(errors.Wrap(err, "failed to send ws-message"))
+						disconnect()
+						return
+					}
+				}
+			case proxy.SchemaBase + "/ws-message.json":
+				p.lastPing = time.Now()
+
+				if p.handler == nil {
+					logger.Error("No handler set, can't process ws-message")
+					return
+				}
+
+				req := &proxy.WSMessage{}
+				if err := json.Unmarshal(body, &req); err != nil {
+					logger.Error(errors.Wrap(err, "failed to unmarshal ws-message"))
+					return
+				}
+
+				p.wsLock.Lock()
+				c := p.ws[req.ID]
+				p.wsLock.Unlock()
+
+				if c == nil {
+					return
+				}
+
+				if err = c.write([]byte(req.Body)); err != nil {
+					fmt.Printf("got error while writing message: %s\n", err)
+
+					c.conn.Close()
+
+					p.wsLock.Lock()
+					delete(p.ws, req.ID)
+					p.wsLock.Unlock()
+
+					t := proxy.NewWSTeardown(req.ID)
+					b, _ := json.Marshal(t)
+					p.write(b)
+
+					return
+				}
+			case proxy.SchemaBase + "/ws-teardown.json":
+				p.lastPing = time.Now()
+
+				if p.handler == nil {
+					logger.Error("No handler set, can't process ws-message")
+					return
+				}
+
+				req := &proxy.WSTeardown{}
+				if err := json.Unmarshal(body, &req); err != nil {
+					logger.Error(errors.Wrap(err, "failed to unmarshal ws-teardown"))
+					return
+				}
+
+				p.wsLock.Lock()
+				c := p.ws[req.ID]
+
+				if c != nil {
+					c.conn.Close()
+				}
+				delete(p.ws, req.ID)
+
+				p.wsLock.Unlock()
 			}
 		}()
 	}
+}
+
+func (p *ProxyClient) Disconnect() error {
+
+	t := proxy.NewDisconnect()
+	b, _ := json.Marshal(t)
+	p.write(b)
+
+	p.disconnect = true
+	return p.conn.Close()
 }
 
 type nopCloser struct {
@@ -323,4 +494,16 @@ type nopCloser struct {
 
 func (nopCloser) Close() error {
 	return nil
+}
+
+type wsConn struct {
+	conn *websocket.Conn
+	lock *sync.Mutex
+}
+
+func (w *wsConn) write(msg []byte) error {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	return w.conn.WriteMessage(websocket.TextMessage, msg)
 }

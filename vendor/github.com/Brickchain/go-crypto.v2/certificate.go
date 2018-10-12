@@ -13,6 +13,7 @@ import (
 	"github.com/Brickchain/go-document.v2"
 )
 
+// VerifyDocumentInJWS wrapps VerifyDocumentWithCertificateChain
 func VerifyDocumentInJWS(docString string, keyLevel int) (document.Document, []*jose.JsonWebKey, *jose.JsonWebKey, error) {
 	jws, err := UnmarshalSignature([]byte(docString))
 	if err != nil {
@@ -57,6 +58,7 @@ func VerifyDocumentInJWS(docString string, keyLevel int) (document.Document, []*
 	return doc, signers, subject, nil
 }
 
+// VerifyDocumentWithTypeInJWS wrapps VerifyDocumentWithCertificateChain
 func VerifyDocumentWithTypeInJWS(docString string, keyLevel int, doc document.Document) ([]*jose.JsonWebKey, *jose.JsonWebKey, error) {
 	jws, err := UnmarshalSignature([]byte(docString))
 	if err != nil {
@@ -101,16 +103,19 @@ func VerifyDocumentWithTypeInJWS(docString string, keyLevel int, doc document.Do
 	return signers, subject, nil
 }
 
+// VerifyDocumentWithCertificateChain wrapps VerifyCertificate
 func VerifyDocumentWithCertificateChain(doc document.Document, keyLevel int) (bool, []*jose.JsonWebKey, *jose.JsonWebKey, error) {
 	if doc.GetCertificate() == "" {
 		return false, nil, nil, errors.New("No certificateChain in document")
 	}
 
 	var subject *jose.JsonWebKey
+
 	signers := make([]*jose.JsonWebKey, 0)
 	certChain := doc.GetCertificate()
 	prevDoc := doc
 	prevKeyLevel := keyLevel
+	prevIssuerTP := ""
 	for {
 		cert, err := VerifyCertificate(certChain, keyLevel)
 		if err != nil {
@@ -119,6 +124,13 @@ func VerifyDocumentWithCertificateChain(doc document.Document, keyLevel int) (bo
 
 		if subject == nil {
 			subject = cert.Subject
+		}
+
+		if prevIssuerTP != "" {
+			subjectTP := Thumbprint(cert.Subject)
+			if subjectTP != prevIssuerTP {
+				return false, nil, nil, fmt.Errorf("Chain is broken, current subject is not issuer of next certificate")
+			}
 		}
 
 		signers = append(signers, cert.Issuer)
@@ -134,6 +146,7 @@ func VerifyDocumentWithCertificateChain(doc document.Document, keyLevel int) (bo
 		if prevKeyLevel == keyLevel {
 			prevKeyLevel = cert.KeyLevel
 		}
+
 		if cert.KeyLevel > prevKeyLevel {
 			return false, nil, nil, errors.New("Not possible to have parent certificate with lower keyLevel than child")
 		}
@@ -144,12 +157,14 @@ func VerifyDocumentWithCertificateChain(doc document.Document, keyLevel int) (bo
 
 		prevDoc = cert
 		prevKeyLevel = cert.KeyLevel
+		prevIssuerTP = Thumbprint(cert.Issuer)
 		certChain = cert.Certificate
 	}
 
 	return true, signers, subject, nil
 }
 
+// VerifyCertificate parses from string and keylevel
 func VerifyCertificate(certificateString string, keyLevel int) (*document.Certificate, error) {
 	certChainJWS, err := UnmarshalSignature([]byte(certificateString))
 	if err != nil {
@@ -179,6 +194,10 @@ func VerifyCertificate(certificateString string, keyLevel int) (*document.Certif
 		return nil, fmt.Errorf("Key level %d is higher than allowed level of %d", certificate.KeyLevel, keyLevel)
 	}
 
+	if certificate.Issuer == nil {
+		return nil, fmt.Errorf("Missing issuer key")
+	}
+
 	issuerTP := Thumbprint(certificate.Issuer)
 	if issuerTP != signingIssuerTP {
 		return nil, fmt.Errorf("Chain was not signed by root key specified in chain")
@@ -191,6 +210,7 @@ func VerifyCertificate(certificateString string, keyLevel int) (*document.Certif
 	return &certificate, nil
 }
 
+// CreateCertificate creates document.Certificate
 func CreateCertificate(issuer, subject *jose.JsonWebKey, keyLevel int, documentTypes []string, ttl int, certificateChain string) (string, error) {
 	issuerPK, err := NewPublicKey(issuer)
 	if err != nil {

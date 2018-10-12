@@ -60,7 +60,9 @@ func (n *node) incrementChildPrio(pos int) int {
 	newPos := pos
 	for newPos > 0 && n.children[newPos-1].priority < prio {
 		// swap node positions
-		n.children[newPos-1], n.children[newPos] = n.children[newPos], n.children[newPos-1]
+		tmpN := n.children[newPos-1]
+		n.children[newPos-1] = n.children[newPos]
+		n.children[newPos] = tmpN
 
 		newPos--
 	}
@@ -148,12 +150,7 @@ func (n *node) addRoute(path string, handle Handle) {
 						continue walk
 					} else {
 						// Wildcard conflict
-						var pathSeg string
-						if n.nType == catchAll {
-							pathSeg = path
-						} else {
-							pathSeg = strings.SplitN(path, "/", 2)[0]
-						}
+						pathSeg := strings.SplitN(path, "/", 2)[0]
 						prefix := fullPath[:strings.Index(fullPath, pathSeg)] + n.path
 						panic("'" + pathSeg +
 							"' in new path '" + fullPath +

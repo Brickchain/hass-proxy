@@ -10,11 +10,12 @@ const LoginRequestType = SchemaLocation + "/login-request.json"
 
 type LoginRequest struct {
 	Base
-	Roles    []string         `json:"roles"`
-	Contract *Contract        `json:"contract,omitempty"`
-	Key      *jose.JsonWebKey `json:"key,omitempty"`
-	TTL      int              `json:"ttl,omitempty"`
-	ReplyTo  []string         `json:"replyTo"`
+	Roles         []string         `json:"roles"`
+	Contract      *Contract        `json:"contract,omitempty"`
+	Key           *jose.JsonWebKey `json:"key,omitempty"`
+	TTL           int              `json:"ttl,omitempty"`
+	ReplyTo       []string         `json:"replyTo"`
+	DocumentTypes []string         `json:"documentTypes"`
 }
 
 func NewLoginRequest(roles []string, key *jose.JsonWebKey, ttl int) *LoginRequest {
