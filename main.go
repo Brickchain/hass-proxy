@@ -141,7 +141,7 @@ func (h *httpClient) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// set the X-HASSIO-KEY header based on the HASSIO_TOKEN environment variable
 	if viper.GetString("hassio_token") != "" {
-		req.Header.Set("X-HASSIO-KEY", viper.GetString("hassio_token"))
+		req.Header.Set("X-HA-ACCESS", viper.GetString("hassio_token"))
 	}
 
 	client := &http.Client{
